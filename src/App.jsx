@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { 
   Plus, Upload, Download, LayoutDashboard, History, Settings, LogOut, 
-  ArrowUpRight, ArrowDownRight, Bell, Search, Minus
+  ArrowUpRight, ArrowDownRight, Bell, Search, Minus, Trash2
 } from 'lucide-react';
+import { useGoogleLogin, googleLogout } from '@react-oauth/google';
+import { getDb, addTransaction as addTxDb, deleteExpense as deleteTxDb } from './db';
 
 const formatRupiah = (number) => {
   return new Intl.NumberFormat('id-ID', {
@@ -13,13 +15,12 @@ const formatRupiah = (number) => {
   }).format(number);
 };
 
-// Donut Chart Component
 const DonutChart = ({ percentage }) => {
   const radius = 50;
   const stroke = 8;
   const normalizedRadius = radius - stroke * 2;
   const circumference = normalizedRadius * 2 * Math.PI;
-  const strokeDashoffset = circumference - percentage / 100 * circumference;
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
 
   return (
     <div className="chart-container">
@@ -52,32 +53,64 @@ const DonutChart = ({ percentage }) => {
 };
 
 export default function App() {
+  const [user, setUser] = useState(null);
+  
   const [activeTab, setActiveTab] = useState('dashboard');
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [isDepositModal, setIsDepositModal] = useState(false);
   const [isWithdrawModal, setIsWithdrawModal] = useState(false);
   const [transactionAmount, setTransactionAmount] = useState('');
 
-  // Initial Mock Data to match Dribbble design reference
-  const initialGoal = {
-    name: 'Iphone 17 Pro Max',
-    target: 50000000,
-    saved: 51450001, // 100% completed reference
-    date: '12 Nov 2026'
+  const [goal, setGoal] = useState({ saved: 0, target: 1 });
+  const [transactions, setTransactions] = useState([]);
+
+  useEffect(() => {
+    const loggedUser = localStorage.getItem('logged_user');
+    if (loggedUser) {
+      const parsedUser = JSON.parse(loggedUser);
+      setUser(parsedUser.profile);
+      loadUserData(parsedUser.profile.id);
+    }
+  }, []);
+
+  const loadUserData = (userId) => {
+    const dbData = getDb(userId);
+    setGoal(dbData.goal);
+    setTransactions(dbData.transactions);
   };
 
-  const initialTransactions = [
-    { id: 1, date: '15 Apr 2026', desc: 'Setoran Bulanan (Gaji)', amount: 15000000, type: 'deposit' },
-    { id: 2, date: '10 Apr 2026', desc: 'Beli Case Loly Poly', amount: 350000, type: 'withdraw' },
-    { id: 3, date: '01 Apr 2026', desc: 'Setoran Uang Lembur', amount: 4500000, type: 'deposit' },
-    { id: 4, date: '28 Mar 2026', desc: 'Setoran Bonus Akhir Tahun', amount: 32300001, type: 'deposit' },
-  ];
+  const handleLoginSuccess = async (tokenResponse) => {
+    try {
+      const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+      });
+      const profile = await userInfoResponse.json();
+      
+      const userData = {
+        id: profile.sub,
+        name: profile.name,
+        email: profile.email,
+        picture: profile.picture
+      };
+      
+      setUser(userData);
+      localStorage.setItem('logged_user', JSON.stringify({ ...tokenResponse, profile: userData }));
+      loadUserData(userData.id);
+    } catch (err) {
+      console.error('Failed to fetch user profile', err);
+    }
+  };
 
-  const [goal, setGoal] = useState(initialGoal);
-  const [transactions, setTransactions] = useState(initialTransactions);
+  const login = useGoogleLogin({
+    onSuccess: handleLoginSuccess,
+    onError: () => console.log('Login failed')
+  });
 
-  const totalSaved = goal.saved;
-  const percentage = Math.min(Math.round((totalSaved / goal.target) * 100), 100);
+  const handleLogout = () => {
+    googleLogout();
+    setUser(null);
+    localStorage.removeItem('logged_user');
+  };
 
   const handleTransaction = (type) => {
     const amount = Number(transactionAmount);
@@ -91,17 +124,60 @@ export default function App() {
       type: type
     };
 
-    setTransactions([newTx, ...transactions]);
-    setGoal(prev => ({
-      ...prev,
-      saved: type === 'deposit' ? prev.saved + amount : Math.max(0, prev.saved - amount)
-    }));
+    if (user) {
+      const updatedDb = addTxDb(user.id, newTx);
+      setGoal(updatedDb.goal);
+      setTransactions(updatedDb.transactions);
+    }
 
     setTransactionAmount('');
     setIsDepositModal(false);
     setIsWithdrawModal(false);
   };
 
+  const handleDeleteExpense = (id) => {
+    if (user) {
+      const updatedDb = deleteTxDb(user.id, id);
+      setGoal(updatedDb.goal);
+      setTransactions(updatedDb.transactions);
+    }
+  };
+
+  const totalSaved = goal.saved || 0;
+  // Calculate percentage safely
+  let percentage = 0;
+  if (goal.target && goal.target > 0) {
+    percentage = Math.min(Math.round((totalSaved / goal.target) * 100), 100);
+  }
+
+  // --- Login Screen Render ---
+  if (!user) {
+    return (
+      <div className="login-container">
+        <div className="login-card">
+          <div className="login-logo">
+             <div style={{ width: 48, height: 48, background: 'var(--accent-color)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
+                <span style={{ color: '#fff', fontSize: '1.75rem', fontWeight: 'bold' }}>N</span>
+             </div>
+             <h2>NabungDong</h2>
+          </div>
+          <h1 className="login-title">Smart Financial Database</h1>
+          <p className="login-subtitle">Sync your goals seamlessly and keep track of your savings securely linked to your Google ID.</p>
+          <button onClick={() => login()} className="btn-google">
+            <svg viewBox="0 0 24 24" width="20" height="20">
+                <path fill="#4285F4" d="M23.745 12.27c0-.825-.07-1.62-.2-2.38H12.24v4.66h6.456a5.535 5.535 0 0 1-2.39 3.63v3.01h3.868c2.26-2.08 3.57-5.15 3.57-8.92Z"/>
+                <path fill="#34A853" d="M12.24 24c3.24 0 5.95-1.07 7.935-2.89l-3.868-3.01c-1.075.72-2.45 1.145-4.067 1.145-3.13 0-5.785-2.115-6.735-4.96H1.52v3.135C3.51 21.365 7.55 24 12.24 24Z"/>
+                <path fill="#FBBC05" d="M5.505 14.285c-.245-.72-.385-1.49-.385-2.285 0-.795.14-1.565.385-2.285V6.58H1.52C.555 8.5 0 10.665 0 12s.555 3.5 1.52 5.42l3.985-3.135Z"/>
+                <path fill="#EA4335" d="M12.24 4.755c1.765 0 3.35.61 4.595 1.79l3.435-3.435C18.18 1.135 15.47 0 12.24 0 7.55 0 3.51 2.635 1.52 6.58l3.985 3.135c.95-2.845 3.605-4.96 6.735-4.96Z"/>
+            </svg>
+            Continue with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Main Dashboard Render ---
   return (
     <div className="app-container">
       {/* Lightbox for Thumbnail */}
@@ -157,12 +233,12 @@ export default function App() {
         </nav>
 
         <div className="user-profile">
-          <img src="https://i.pravatar.cc/150?img=11" alt="User Avatar" className="avatar" />
+          <img src={user.picture || "https://i.pravatar.cc/150?img=11"} alt="User Avatar" className="avatar" />
           <div className="user-info">
-            <div className="user-name">Andrew F.</div>
-            <div className="user-email">andrew@minimal.com</div>
+            <div className="user-name">{user.name}</div>
+            <div className="user-email">{user.email}</div>
           </div>
-          <button className="btn-logout" title="Logout">
+          <button className="btn-logout" onClick={handleLogout} title="Logout">
             <LogOut size={18} />
           </button>
         </div>
@@ -172,7 +248,7 @@ export default function App() {
       <main className="main-content">
         <header className="header">
           <div>
-            <div className="greeting">Good Morning, Andrew</div>
+            <div className="greeting">Good Morning, {user.name.split(' ')[0]}</div>
             <p>Welcome back to your financial dashboard.</p>
           </div>
           <div className="flex items-center gap-4">
@@ -251,6 +327,7 @@ export default function App() {
                       <th>Description</th>
                       <th>Type</th>
                       <th style={{ textAlign: 'right' }}>Amount</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -267,6 +344,13 @@ export default function App() {
                         </td>
                         <td className={`td-amount ${tx.type === 'deposit' ? 'positive' : 'negative'}`} style={{ textAlign: 'right' }}>
                           {tx.type === 'deposit' ? '+' : '-'}{formatRupiah(tx.amount)}
+                        </td>
+                        <td style={{ width: '40px', textAlign: 'center' }}>
+                          {tx.type === 'withdraw' && (
+                            <button className="btn-icon text-secondary hover-danger" title="Delete Expense (Correct Data)" onClick={() => handleDeleteExpense(tx.id)}>
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -289,6 +373,7 @@ export default function App() {
                      <th>Description</th>
                      <th>Type</th>
                      <th style={{ textAlign: 'right' }}>Amount</th>
+                     <th></th>
                    </tr>
                  </thead>
                  <tbody>
@@ -306,11 +391,18 @@ export default function App() {
                        <td className={`td-amount ${tx.type === 'deposit' ? 'positive' : 'negative'}`} style={{ textAlign: 'right' }}>
                          {tx.type === 'deposit' ? '+' : '-'}{formatRupiah(tx.amount)}
                        </td>
+                       <td style={{ width: '40px', textAlign: 'center' }}>
+                         {tx.type === 'withdraw' && (
+                           <button className="btn-icon text-secondary hover-danger" title="Delete Expense (Correct Data)" onClick={() => handleDeleteExpense(tx.id)}>
+                             <Trash2 size={16} />
+                           </button>
+                         )}
+                       </td>
                      </tr>
                    ))}
                    {transactions.length === 0 && (
                      <tr>
-                       <td colSpan="4" style={{ textAlign: 'center', padding: '40px' }} className="text-secondary">
+                       <td colSpan="5" style={{ textAlign: 'center', padding: '40px' }} className="text-secondary">
                          No transactions yet.
                        </td>
                      </tr>
@@ -326,11 +418,10 @@ export default function App() {
            <section>
              <h2 className="section-title">Settings</h2>
              <div className="card">
-               <p className="text-secondary">App configuration and preferences go here.</p>
+               <p className="text-secondary">Account connected to: <strong>{user.email}</strong> (Google)</p>
              </div>
            </section>
         )}
-
       </main>
     </div>
   );
